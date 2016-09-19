@@ -1,0 +1,310 @@
+# Install latest OpenStack DevStack on a CS4.4-SSD Cloudlet ($.06/hr) running Linux Ubuntu Server 14.04 LTS 64-bit
+cloudscript devstack
+    version                 = _latest
+    result_template         = devstack_result_template
+
+globals
+    devstack_hostname       = 'devstack'
+    devstack_instance_type  = 'CS8.8-SSD'   # 4GB RAM, 4 vCore, 100GB SSD, 10Gbps
+    devstack_image_type     = 'Ubuntu Server 14.04 LTS 64-bit'
+    devstack_slice_user     = 'devstack'
+    devstack_branch         = 'stable/liberty'
+    oneforall_password      = lib::random_password()
+    server_password         = lib::random_password()
+    console_password        = lib::random_password()
+
+thread devstack_setup
+    tasks                   = [devstack_server_setup]
+
+task devstack_server_setup
+
+    #----------------------
+    # Create devstack keys
+    #----------------------
+
+    # Create devstack all-for-one password key
+    /key/password devstack_oneforall_password_key read_or_create
+        key_group           = _SERVER
+        password            = oneforall_password
+
+    # Create devstack server root password key
+    /key/password devstack_server_password_key read_or_create
+        key_group           = _SERVER
+        password            = server_password
+
+    # Create devstack server console key
+    /key/password devstack_server_console_key read_or_create
+        key_group           = _CONSOLE
+        password            = console_password
+
+    #--------------------------------
+    # Create devstack storage slice,
+    # bootstrap script and recipe
+    #--------------------------------
+
+    # Create storage slice keys
+    /key/token devstack_slice_key read_or_create
+        username            = devstack_slice_user
+
+    # Create slice to store script in cloudstorage
+
+    /storage/slice devstack_slice read_or_create
+        keys                = [devstack_slice_key]
+
+    # Create slice container to store script in cloudstorage
+    /storage/container devstack_container => [devstack_slice] read_or_create
+        slice               = devstack_slice
+
+    # Place script data in cloudstorage
+
+    /storage/object devstack_bootstrap_object => [devstack_slice, devstack_container] read_or_create
+        container_name      = 'devstack_container'
+        file_name           = 'bootstrap_devstack.sh'
+        slice               = devstack_slice
+        content_data        = devstack_bootstrap_data
+
+    # Associate the cloudstorage object with the devstack script
+    /orchestration/script devstack_bootstrap_script => [devstack_slice, devstack_container, devstack_bootstrap_object] read_or_create
+        data_uri            = 'cloudstorage://devstack_slice/devstack_container/bootstrap_devstack.sh'
+        script_type         = _SHELL
+        encoding            = _STORAGE
+
+    # Create the recipe and associate the script
+    /orchestration/recipe devstack_bootstrap_recipe read_or_create
+        scripts             = [devstack_bootstrap_script]
+
+    #
+    # Create the devstack server
+    #
+
+    /server/cloud devstack_server read_or_create
+        hostname            = '{{ devstack_hostname }}'
+        image               = '{{ devstack_image_type }}'
+        service_type        = '{{ devstack_instance_type }}'
+        keys                = [devstack_server_password_key, devstack_server_console_key]
+        recipes             = [devstack_bootstrap_recipe]
+        recipe_timeout      = 1200
+
+text_template devstack_bootstrap_data
+#!/bin/sh
+
+# check if running as root
+[ `whoami` = 'root' ] || {
+    echo "ERROR: must have root permissions to execute the commands"
+    exit 1
+}
+
+# Update packages
+apt-get update
+#apt-get upgrade -y
+
+# Install git
+apt-get install git -y
+
+# change to tmp folder
+cd /tmp
+
+# create ssh private key file
+cat << \EOF >/tmp/ssh-key-private
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA5K1Q8HG7M107kVTbKnyjLpsU7m9brUwd10nGpI6Wz84clGjA
+n0+6WRlndG6DYEcH0volmJCcFjuf+puMFgve7Lw8vfYe4IZ8vtqG9lx266cQTYAM
+tH8M0odao/XHd7PvfT80SOQhC1QXPhTK4zB4Vn5MIDq+E/jIspww2N8LWXg1TNwg
+yha9YrL3kteU+V3Eqdd/mhUYnnbN5/mS2bG32skNyw1R0gBM7gpB/TcfwSoOJw7U
+cagPuyTP0+p7KKnsNjR10Dmp1EjTa8fCwe7h1msOT9n3zkGOtw42E8QtxCJX/Lvn
+kpN4RKOydGt2b2KtnTRhRdjGAkYpY0MAT3ogLwIDAQABAoIBADMCgkqQZBzKEE6T
+6iupD9GGoH2rc3zNvN5YQ6pTcEq8hF2KnGUtKLlVVGGBgWbJkXI7gIVuxJKlDEOf
+zPjh/wE54CbTrwGQnmUIZBCygYiBhL508OCWcqrHrK1kVvFZvvNmVOhpkwFu6Zxc
+kQFqv30zwRFzaREVbteAxdiqsGJtZQKx57nRnlmN/UfZdpPGlDVaMPBVJvhDHe9j
+3+8J1Lvz4WOlDxsaN1DTzF+Qu7yhJb+q2GUGBnDyGsi1b2S4InPzFpFFBsqWttt9
+MuNPvFEZ0P19QoYv38DLO8mlGy366q+xCRiZnAAz26WHgN7q6QXB7az2/kAE/1G6
+yRhr76kCgYEA/6hfQs9Cg3v4gsLOlTa36RrIV8d9L7+Rbi6ZUHZWqbx8HV9JjQBz
+1NxBqOSX3g2NEJFUppJD28GziSzOH06PVd1Dm+GkY7jAkCbpNZbsvY+WycPvyC3F
+RL9HYFwQFP9rlRkoK1Jz4/JrtBsqkbPXjd77cQzAez/sEc9fmCfne00CgYEA5Puy
+QI5/QfQZ5Yll/rSZ2FaB+RxDM5E7LTZS1wJmG95felCCULt2DApfzlMbxnwRpTC1
+9TU1LTcpKyVCbUppwOqS+xenkn/PwRXVJCSSHCL/lupDG+azENnv+gDiwBbA3wlo
+HjdJBLsCf6n6iv8bQwjSdCf983bfin4eprOuc2sCgYEAnCHfy5V4MYSMiI8gStBY
+EOxiXfle4sJDtt6Oky0yUAbkZavD53DXTLAXCWZRuTLda7jV0cSR3Ku3UZcjass3
+jmDK4XA0TRKPx3l8A1ZgzoPauu4GimIpj4qhtJ+E0s4KjcwHVC3OyO9MB3pvzPvg
+MKx1Mt1uz9aB/X6ACxSTsiECgYA2ezBhLcZXgeW7eGJ9JKlKEOMhyziuB0sGKdux
+7o8u6EzdRFSNMt0WZk1/QMTmB9UG8b0JV5yMYoh4DIhuinr4/Jb2CR3EvIZI0ZIB
+5HWjHiyj0p8e/1fxlXkEibtpqsA/EPTl44+LAZfJmj7TXXk2DN5N5soEaG8te259
+iVjjewKBgQCZ5+siorlYciEJQHmIuk4Gz7LLWTw9CrOSUrqNDQIrUebQ0QxNT/tq
+7eLZ59JXIij6ZcP6vy6jiKNqXWy/S3adSnX3vSPXTFXrOXnSV0IORmtNTzNdLIHU
+mVh42MQ77+izXGDZyvTPwwIHT7punlS/CTetIkje+EeifybP0XSF4g==
+-----END RSA PRIVATE KEY-----
+EOF
+
+# change the permission of ssh-key-private file
+sudo chmod 400 ssh-key-private
+
+# change host checking to no for github
+sudo ssh -o StrictHostKeyChecking=no git@github.com
+
+# check-out the openstack-tools files
+sudo ssh-agent bash -c 'ssh-add /tmp/ssh-key-private; git clone git@github.com:nephoscale/openstack-tools.git open-stack-tools'
+
+# move the files to opt folder
+mv open-stack-tools /opt/
+
+# change the permission of open-stack-tools folder
+sudo chmod -R 777 /opt/open-stack-tools
+
+# Clone devstack repo from stable branch
+cd /opt
+
+git clone -b {{ devstack_branch }} https://github.com/openstack-dev/devstack.git
+
+# enabling SNAT and IP masquerade
+echo 1 > /proc/sys/net/ipv4/ip_forward
+echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+
+# creating the file for fetching inet address amd executing commands
+# Modifications for working of subnet update in liberty version
+cat << \EOF >/opt/devstack/dnsconf
+#!/bin/bash
+cd /opt/devstack/
+source /opt/devstack/openrc admin demo
+/usr/local/bin/neutron subnet-list --field id --name public-subnet | awk '{print $2}' > id1.txt
+/usr/local/bin/neutron subnet-list --field id --name private-subnet | awk '{print $2}' > id2.txt
+/usr/local/bin/neutron subnet-list --field id --name ipv6-private-subnet | awk '{print $2}' > id3.txt
+/usr/local/bin/neutron subnet-list --field id --name ipv6-public-subnet | awk '{print $2}' > id4.txt
+i1=`sed '4!d' id1.txt`
+i2=`sed '4!d' id2.txt`
+i3=`sed '4!d' id3.txt`
+i4=`sed '4!d' id4.txt`
+/usr/local/bin/neutron subnet-update $i1 --dns-nameservers list=true 8.8.8.8 8.8.4.4
+/usr/local/bin/neutron subnet-update $i2 --dns-nameservers list=true 8.8.8.8 8.8.4.4
+/usr/local/bin/neutron subnet-update $i3 --dns-nameservers list=true 2001:4860:4860::8888 2001:4860:4860::8844
+/usr/local/bin/neutron subnet-update $i4 --dns-nameservers list=true 2001:4860:4860::8888 2001:4860:4860::8844
+EOF
+
+# Create local.conf with necessary config options
+# Modified for adding Cloudkitty config
+cat << \EOF >/opt/devstack/local.conf
+[[local|localrc]]
+#Network 
+#HOST_IP=
+HOST_IP_IFACE=eth0
+
+# Database user
+DATABASE_USER=root
+
+# Passwords
+DATABASE_PASSWORD={{ devstack_oneforall_password_key.password }}
+ADMIN_PASSWORD={{ devstack_oneforall_password_key.password }}
+SERVICE_PASSWORD={{ devstack_oneforall_password_key.password }}
+SERVICE_TOKEN={{ devstack_oneforall_password_key.password }}
+RABBIT_PASSWORD=guest
+SWIFT_HASH={{ devstack_oneforall_password_key.password }}
+
+# Branches
+# Modified the branch after the Openstack change
+KEYSTONE_BRANCH=stable/liberty
+NOVA_BRANCH=stable/liberty
+NEUTRON_BRANCH=stable/liberty
+SWIFT_BRANCH=stable/liberty
+GLANCE_BRANCH=stable/liberty
+CINDER_BRANCH=stable/liberty
+HEAT_BRANCH=stable/liberty
+TROVE_BRANCH=stable/liberty
+HORIZON_BRANCH=stable/liberty
+
+# Services
+ENABLED_SERVICES=rabbit,mysql,key
+ENABLED_SERVICES+=,n-api,n-crt,n-obj,n-cpu,n-cond,n-sch,n-novnc,n-cauth
+ENABLED_SERVICES+=,neutron,q-svc,q-agt,q-dhcp,q-l3,q-meta,q-lbaas
+ENABLED_SERVICES+=,s-proxy,s-object,s-container,s-account
+ENABLED_SERVICES+=,g-api,g-reg
+ENABLED_SERVICES+=,cinder,c-api,c-vol,c-sch,c-bak
+ENABLED_SERVICES+=,heat,h-api,h-api-cfn,h-api-cw,h-eng
+ENABLED_SERVICES+=,trove,tr-api,tr-tmgr,tr-cond
+
+# modified the repository as we edited some necessary fields
+enable_plugin ceilometer https://github.com/muraliselva10/ceilometer.git master
+ENABLED_SERVICES+=,horizon
+enable_plugin cloudkitty https://github.com/muraliselva10/cloudkitty.git master
+ENABLED_SERVICES+=,ck-api,ck-proc
+
+# Enable Logging
+LOGFILE=/opt/stack/logs/stack.sh.log
+VERBOSE=True
+LOG_COLOR=True
+SCREEN_LOGDIR=/opt/stack/logs
+
+# For adding code to nova.conf for generating notifications
+[[post-config|$NOVA_CONF]]
+[DEFAULT]
+notification_driver=messagingv2
+notification_topics=notifications,trackinstance
+
+# For adding code to cinder.conf for generating notifications
+[[post-config|$CINDER_CONF]]
+[DEFAULT]
+notification_driver=messagingv2
+notification_topics=notifications,trackinstance
+
+# For activating necessary services
+[[post-config|$CLOUDKITTY_CONF]]
+[collect]
+period = 300
+services=compute,image,volume,network.bw.in,network.bw.out,network.floating
+
+# For automating the version
+[extra_conf]
+nova_version=2
+cloudkitty_version=1
+log_file=/var/log/cloudkitty/automated_billing.log
+EOF
+
+# Add public IP to configuration
+IP=`ifconfig eth0 | grep "inet addr" | head -n 1 | cut -d : -f 2 | cut -d " " -f 1`
+sed -r "s/#HOST_IP=/HOST_IP=$IP/g" /opt/devstack/local.conf > /opt/devstack/local.conf.tmp
+mv /opt/devstack/local.conf.tmp /opt/devstack/local.conf
+
+# Replace passwords with hash
+HASH=`echo "{{ devstack_oneforall_password_key.password }}" | sha256sum |awk '{print $1}'`
+sed -r "s/SWIFT_HASH=.*/SWIFT_HASH=$HASH/g" /opt/devstack/local.conf > /opt/devstack/local.conf.tmp
+mv /opt/devstack/local.conf.tmp /opt/devstack/local.conf
+
+# Create user
+/opt/devstack/tools/create-stack-user.sh
+
+# Change privileges
+chown -R stack:stack /opt/devstack
+
+# change directory before executing stack.sh
+cd /opt/devstack
+
+# Create stack
+su stack -c /opt/devstack/stack.sh
+
+# Changing the permission of file
+chmod -R 755 /opt/devstack/dnsconf
+
+# execute the file for allowing DNS access from openstack instance
+/opt/devstack/dnsconf
+
+# change the directory 
+cd /opt/open-stack-tools/rate_tool
+
+# execute the python script
+python track_events.py --event_conf=/opt/open-stack-tools/rate_tool/track_events.conf
+
+sudo rabbitmq-plugins enable rabbitmq_management
+sudo service rabbitmq-server restart
+
+_eof
+
+text_template devstack_result_template
+
+Horizon will be ready in few minutes at http://{{ devstack_server.ipaddress_public }}/
+Login: admin
+Password: {{ devstack_oneforall_password_key.password }}
+
+You can login via ssh to: {{ devstack_server.ipaddress_public }}
+Login: root
+Password: {{ devstack_server_password_key.password }}
+
+_eof

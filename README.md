@@ -1,2 +1,2 @@
-# openstack-utils
-Openstack Utilities
+# openstack-tools
+Tools for customizing OpenStack.

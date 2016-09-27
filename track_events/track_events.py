@@ -2,7 +2,7 @@
 #
 # Notification Generator for Openstack Events
 # 
-# Author: Muralidharan.S, Sundhar.S
+# Author: Muralidharan.S
 #
 import argparse
 import sys
